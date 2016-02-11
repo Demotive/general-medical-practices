@@ -34,40 +34,53 @@ ODS_PRACTICE_HEADER = %w(
 )
 
 class Practice
-  def initialize(data)
-    @data = data
+  def initialize(ods_data:, choices_data:)
+    @ods_data = ods_data
+    @choices_data = choices_data
+  end
+
+  def complete_record?
+    !ods_data.empty?
   end
 
   def organisation_code
-    data.fetch("organisation_code")
+    ods_data.fetch("organisation_code")
   end
 
   def active?
-    data.fetch("status_code") == "A"
+    ods_data.fetch("status_code") == "A"
   end
 
   def gp_practice?
-    data.fetch("prescribing_setting") == "4"
+    ods_data.fetch("prescribing_setting") == "4"
   end
 
   def to_hash
     {
       organisation_code: organisation_code,
       name: formatted_name,
-      address: address,
+      location: location_hash,
       contact_telephone_number: contact_telephone_number,
     }
   end
 
 private
-  attr_reader :data
+  attr_reader :ods_data, :choices_data
+
+  def location_hash
+    {
+      address: address,
+      latitude: latitude,
+      longitude: longitude,
+    }.reject { |_, v| v.nil? }
+  end
 
   def formatted_name
     name.split(/\b/).map(&:capitalize).join
   end
 
   def name
-    data.fetch("name")
+    ods_data.fetch("name")
   end
 
   def address
@@ -80,7 +93,7 @@ private
 
   def address_parts
     address_columns
-      .map { |f| data.fetch(f) }
+      .map { |f| ods_data.fetch(f) }
       .reject(&:empty?)
   end
 
@@ -95,16 +108,24 @@ private
   end
 
   def postcode
-    data.fetch("postcode")
+    ods_data.fetch("postcode")
   end
 
   def contact_telephone_number
-    data.fetch("contact_telephone_number")
+    ods_data.fetch("contact_telephone_number")
+  end
+
+  def latitude
+    choices_data.fetch("Latitude", nil)
+  end
+
+  def longitude
+    choices_data.fetch("Longitude", nil)
   end
 end
 
 def usage_message
-  "Usage: #{$0} ods_data_file.csv [ods_amendment_file_1.csv ...]"
+  "Usage: #{$0} choices_data_file.csv ods_data_file.csv [ods_amendment_file_1.csv ...]"
 end
 
 def load_ods_practitioners_csv(file_name)
@@ -117,16 +138,37 @@ def load_ods_practitioners_csv(file_name)
   hash
 end
 
-ods_file = ARGV.fetch(0) { abort(usage_message) }
-ods_amendments = ARGV.drop(1)
-ods_data_files = [ods_file] + ods_amendments
+def load_choices_csv(file_name)
+  hash = {}
 
-practice_data = ods_data_files
+  CSV.read(file_name, col_sep: "\u00AC", quote_char: "\x00", encoding: "ISO-8859-1", headers: true).each do |row|
+    hash[row.fetch("OrganisationCode")] = row.to_hash
+  end
+
+  hash
+end
+
+ods_file = ARGV.fetch(1) { abort(usage_message) }
+ods_amendments = ARGV.drop(2)
+ods_data_files = [ods_file] + ods_amendments
+ods_data = ods_data_files
   .map(&method(:load_ods_practitioners_csv))
   .reduce(&:merge)
-  .values
+
+choices_data_file = ARGV.fetch(0) { abort(usage_message) }
+choices_data = load_choices_csv(choices_data_file)
+
+organisation_codes = ods_data.keys | choices_data.keys
+
+practice_data = organisation_codes
   .lazy
-  .map(&Practice.method(:new))
+  .map { |code|
+    Practice.new(
+      ods_data: ods_data.fetch(code, {}),
+      choices_data: choices_data.fetch(code, {}),
+    )
+  }
+  .select(&:complete_record?)
   .select(&:active?)
   .select(&:gp_practice?)
   .sort_by(&:organisation_code)
