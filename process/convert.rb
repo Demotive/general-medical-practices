@@ -70,6 +70,7 @@ private
   def location_hash
     {
       address: address,
+      postcode: postcode,
       latitude: latitude,
       longitude: longitude,
     }.reject { |_, v| v.nil? }
@@ -84,7 +85,7 @@ private
   end
 
   def address
-    [*address_parts, postcode]
+    address_parts
       .join(", ")
       .split(/\b/)
       .map { |a| a =~ /[^A-Z]/ ? a : a.capitalize }
